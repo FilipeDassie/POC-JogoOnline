@@ -79,8 +79,11 @@ namespace JogoOnline.API
         private void RegisterBackgroundServices()
         {
             // Agenda o processamento dos resultados dos jogos.
-            RecurringJob.AddOrUpdate<GameResultService>(nameof(GameResultService.GetGameResultRedisCache), x => x.GetGameResultRedisCache(null, true),
+            RecurringJob.AddOrUpdate<GameResultService>(nameof(GameResultService.ProcessGameResultRedisCache), x => x.ProcessGameResultRedisCache(null),
                 Configuration[Constant.Key_AppSettings_Cron_Expression_Process_Game_Result]);
+
+            // Inicia o processamento.
+            RecurringJob.Trigger(nameof(GameResultService.ProcessGameResultRedisCache));
         }
     }
 }

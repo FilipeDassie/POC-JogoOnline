@@ -123,7 +123,7 @@ namespace JogoOnline.API.Services
                 if (!objResult.Errors.Any())
                 {
                     objResult.Success = true;
-                    objResult.Data = mapper.Map<List<Models.GameResultBalance>>(await GetGameResultRedisCache(null, false));
+                    objResult.Data = mapper.Map<List<Models.GameResultBalance>>(await GetGameResultRedisCache());
                 }
 
                 return objResult;
@@ -166,57 +166,66 @@ namespace JogoOnline.API.Services
 
         #region Redis
 
-        public async Task<List<Models.GameResultBalance>> GetGameResultRedisCache(PerformContext performContext, bool forceExecution)
+        public async Task<List<Models.GameResultBalance>> ProcessGameResultRedisCache(PerformContext performContext)
+        {
+            List<Models.GameResultBalance> objReturn = null;
+
+            #region Memory Cache
+
+            List<Entities.GameResult> objGameResultsMemory = GetGameResultMemoryCache();
+
+            if (!IsEmptyList(objGameResultsMemory))
+            {
+                foreach (Entities.GameResult objGameResultMemory in objGameResultsMemory)
+                {
+                    objGameResultMemory.Player = null;
+                    objGameResultMemory.Game = null;
+                }
+
+                await context.Set<Entities.GameResult>().AddRangeAsync(objGameResultsMemory);
+
+                await context.SaveChangesAsync();
+
+                memoryCacheService.RemoveGameResultMemoryCache();
+            }
+
+            #endregion
+
+            #region Redis Cache
+
+            DateTimeOffset now = DateTimeOffset.Now;
+
+            objReturn = (from x in
+                             (await context.Set<Entities.GameResult>()
+                             .AsNoTracking()
+                             .Include(x => x.Player)
+                             .ToAsyncEnumerable()
+                             .ToList())
+                         group x by new { x.Player } into y
+                         select new Models.GameResultBalance
+                         {
+                             Player = mapper.Map<Models.Player>(y.Key.Player),
+                             Balance = y.Sum(x => x.Win),
+                             LastUpdateDate = now
+                         })
+                        .OrderByDescending(x => x.Balance)
+                        .Take(100)
+                        .ToList();
+
+            #endregion
+
+            await SetGameResultRedisCache(objReturn);
+
+            return objReturn;
+        }
+
+        public async Task<List<Models.GameResultBalance>> GetGameResultRedisCache()
         {
             List<Models.GameResultBalance> objReturn = await cacheService.GetGameResultRedisCache();
 
-            if ((objReturn == null) || (forceExecution))
+            if (objReturn == null)
             {
-                #region Memory Cache
-
-                List<Entities.GameResult> objGameResultsMemory = GetGameResultMemoryCache();
-
-                if (!IsEmptyList(objGameResultsMemory))
-                {
-                    foreach (Entities.GameResult objGameResultMemory in objGameResultsMemory)
-                    {
-                        objGameResultMemory.Player = null;
-                        objGameResultMemory.Game = null;
-                    }
-
-                    await context.Set<Entities.GameResult>().AddRangeAsync(objGameResultsMemory);
-
-                    await context.SaveChangesAsync();
-
-                    memoryCacheService.RemoveGameResultMemoryCache();
-                }
-
-                #endregion
-
-                #region Redis Cache
-
-                DateTimeOffset now = DateTimeOffset.Now;
-
-                objReturn = (from x in
-                                 (await context.Set<Entities.GameResult>()
-                                 .AsNoTracking()
-                                 .Include(x => x.Player)
-                                 .ToAsyncEnumerable()
-                                 .ToList())
-                            group x by new { x.Player } into y
-                            select new Models.GameResultBalance
-                            {
-                                Player = mapper.Map<Models.Player>(y.Key.Player),
-                                Balance = y.Sum(x => x.Win),
-                                LastUpdateDate = now
-                            })
-                            .OrderByDescending(x => x.Balance)
-                            .Take(100)
-                            .ToList();
-
-                await SetGameResultRedisCache(objReturn);
-
-                #endregion
+                objReturn = await ProcessGameResultRedisCache(null);
             }
 
             return objReturn;
